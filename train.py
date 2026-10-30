@@ -1,8 +1,11 @@
+import json
 import os
-import time
 import random
+import time
+
 import torch
 import torch.nn.functional as F
+import matplotlib.pyplot as plt
 from torch.utils.data import DataLoader
 from torchvision import datasets, transforms
 
@@ -12,8 +15,8 @@ from model import SmallViT
 # ---------------- Configuration ----------------
 SEED = 42
 BATCH_SIZE = 64
-TEACHER_EPOCHS = 15
-STUDENT_EPOCHS = 10
+TEACHER_EPOCHS = 60
+STUDENT_EPOCHS = 30
 NUM_WORKERS = 0
 
 KEEP_RATIO = 0.7          # rho : ratios cibles des 3 étages = [rho, rho^2, rho^3]
@@ -74,13 +77,55 @@ test_loader = DataLoader(test_dataset, batch_size=BATCH_SIZE, shuffle=False,
 @torch.no_grad()
 def evaluate(model, loader):
     model.eval()   # le Student élague physiquement les tokens (Eq. 17)
-    correct, total = 0, 0
+    total_loss, correct, total = 0.0, 0, 0
     for images, labels in loader:
         images, labels = images.to(DEVICE), labels.to(DEVICE)
         logits, _, _ = model(images)
+        total_loss += F.cross_entropy(logits, labels, reduction="sum").item()
         correct += (logits.argmax(1) == labels).sum().item()
         total += labels.size(0)
-    return 100.0 * correct / total
+    return total_loss / total, 100.0 * correct / total
+
+
+def save_training_results(histories):
+    os.makedirs("results", exist_ok=True)
+    history_path = "results/training_history.json"
+    figure_path = "results/training_curves.png"
+
+    with open(history_path, "w", encoding="utf-8") as history_file:
+        json.dump(histories, history_file, ensure_ascii=False, indent=2)
+
+    fig, axes = plt.subplots(2, 2, figsize=(14, 10))
+    for column, model_name in enumerate(("teacher", "student")):
+        history = histories[model_name]
+        epochs = range(1, len(history["train_loss"]) + 1)
+
+        axes[0, column].plot(
+            epochs, history["train_accuracy"], label="Train"
+        )
+        axes[0, column].plot(
+            epochs, history["test_accuracy"], label="Test"
+        )
+        axes[0, column].set_title(f"{model_name.title()} - Accuracy")
+        axes[0, column].set_xlabel("Époque")
+        axes[0, column].set_ylabel("Accuracy (%)")
+        axes[0, column].grid(True, alpha=0.3)
+        axes[0, column].legend()
+
+        axes[1, column].plot(epochs, history["train_loss"], label="Train")
+        axes[1, column].plot(epochs, history["test_loss"], label="Test")
+        axes[1, column].set_title(f"{model_name.title()} - Loss")
+        axes[1, column].set_xlabel("Époque")
+        axes[1, column].set_ylabel("Cross-entropy loss")
+        axes[1, column].grid(True, alpha=0.3)
+        axes[1, column].legend()
+
+    fig.tight_layout()
+    fig.savefig(figure_path, dpi=150, bbox_inches="tight")
+    print(f"Courbes enregistrées dans : {figure_path}")
+    print(f"Historique enregistré dans : {history_path}")
+    plt.show()
+    plt.close(fig)
 
 
 # ---------------- Les 4 pertes de l'article ----------------
@@ -131,6 +176,12 @@ def dynamicvit_losses(student_logits, student_tokens, decisions,
 def train_teacher(model, epochs):
     optimizer = torch.optim.AdamW(model.parameters(), lr=LR_TEACHER,
                                   weight_decay=0.01)
+    history = {
+        "train_loss": [],
+        "test_loss": [],
+        "train_accuracy": [],
+        "test_accuracy": [],
+    }
     for epoch in range(1, epochs + 1):
         model.train()
         total_loss, correct, total = 0.0, 0, 0
@@ -145,11 +196,19 @@ def train_teacher(model, epochs):
             total_loss += loss.item() * labels.size(0)
             correct += (logits.argmax(1) == labels).sum().item()
             total += labels.size(0)
+        train_loss = total_loss / total
+        train_accuracy = 100.0 * correct / total
+        test_loss, test_accuracy = evaluate(model, test_loader)
+        history["train_loss"].append(train_loss)
+        history["test_loss"].append(test_loss)
+        history["train_accuracy"].append(train_accuracy)
+        history["test_accuracy"].append(test_accuracy)
         print(f"[Teacher] Époque {epoch}/{epochs} | loss={total_loss/total:.4f} | "
-              f"train_acc={100*correct/total:.2f}% | "
-              f"test_acc={evaluate(model, test_loader):.2f}% | "
+              f"train_acc={train_accuracy:.2f}% | "
+              f"test_acc={test_accuracy:.2f}% | "
               f"temps={time.time()-start:.1f}s")
     torch.save(model.state_dict(), "checkpoints/teacher.pth")
+    return history
 
 
 # ---------------- Student ----------------
@@ -165,6 +224,12 @@ def train_student(student, teacher, epochs):
     ], weight_decay=0.01)
 
     teacher.eval()
+    history = {
+        "train_loss": [],
+        "test_loss": [],
+        "train_accuracy": [],
+        "test_accuracy": [],
+    }
 
     for epoch in range(1, epochs + 1):
         # Backbone gelé (lr = 0) pendant les premières époques
@@ -203,21 +268,29 @@ def train_student(student, teacher, epochs):
             rates_sum += rates.detach() * n
 
         rates_avg = (rates_sum / total).tolist()
+        train_loss = sums["cls"] / total
+        train_accuracy = 100.0 * correct / total
+        test_loss, test_accuracy = evaluate(student, test_loader)
+        history["train_loss"].append(train_loss)
+        history["test_loss"].append(test_loss)
+        history["train_accuracy"].append(train_accuracy)
+        history["test_accuracy"].append(test_accuracy)
         print(f"[Student] Époque {epoch}/{epochs} | loss={sums['total']/total:.4f} | "
               f"cls={sums['cls']/total:.4f} | KL={sums['kl']/total:.4f} | "
               f"distill={sums['distill']/total:.4f} | ratio={sums['ratio']/total:.4f}")
-        print(f"           train_acc={100*correct/total:.2f}% | "
-              f"test_acc={evaluate(student, test_loader):.2f}% | "
+        print(f"           train_acc={train_accuracy:.2f}% | "
+              f"test_acc={test_accuracy:.2f}% | "
               f"conservation par étage={[round(r, 3) for r in rates_avg]} | "
               f"temps={time.time()-start:.1f}s")
 
     torch.save(student.state_dict(), "checkpoints/student.pth")
+    return history
 
 
 def main():
     print("\n=== 1. Teacher ===")
     teacher = SmallViT(use_pruning=False).to(DEVICE)
-    train_teacher(teacher, TEACHER_EPOCHS)
+    teacher_history = train_teacher(teacher, TEACHER_EPOCHS)
 
     print("\n=== 2. Student (DynamicViT) ===")
     student = SmallViT(use_pruning=True, keep_ratio=KEEP_RATIO).to(DEVICE)
@@ -225,11 +298,17 @@ def main():
     # strict=False : les prédicteurs n'existent pas dans le Teacher.
     student.load_state_dict(teacher.state_dict(), strict=False)
 
-    train_student(student, teacher, STUDENT_EPOCHS)
+    student_history = train_student(student, teacher, STUDENT_EPOCHS)
 
     print("\n=== Résumé final ===")
-    print(f"Teacher test accuracy : {evaluate(teacher, test_loader):.2f}%")
-    print(f"Student test accuracy : {evaluate(student, test_loader):.2f}%")
+    _, teacher_accuracy = evaluate(teacher, test_loader)
+    _, student_accuracy = evaluate(student, test_loader)
+    print(f"Teacher test accuracy : {teacher_accuracy:.2f}%")
+    print(f"Student test accuracy : {student_accuracy:.2f}%")
+    save_training_results({
+        "teacher": teacher_history,
+        "student": student_history,
+    })
 
 
 if __name__ == "__main__":

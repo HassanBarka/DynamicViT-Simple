@@ -10,11 +10,12 @@ The model splits each 32 × 32 image into 64 patches. The student has three prun
 - PyTorch
 - Torchvision
 - Pillow
+- Matplotlib
 
 Install the packages in your environment:
 
 ```bash
-python -m pip install torch torchvision pillow
+python -m pip install torch torchvision pillow matplotlib
 ```
 
 For GPU training, install the PyTorch build compatible with your CUDA setup. The scripts automatically use CUDA when available and otherwise run on the CPU.
@@ -34,6 +35,12 @@ The trained model state dictionaries are saved to:
 - `checkpoints/teacher.pth`
 - `checkpoints/student.pth`
 
+After both models finish training, the script displays their training and test
+accuracy and loss curves. It saves the figure to `results/training_curves.png`
+and the per-epoch metrics to `results/training_history.json`. Student loss
+curves use the classification cross-entropy component; the console continues
+to report the full distillation objective.
+
 The prediction example below uses `checkpoints/student.pth`. Running training again overwrites the checkpoint files.
 
 ## Predict an image
@@ -41,7 +48,7 @@ The prediction example below uses `checkpoints/student.pth`. Running training ag
 After training, classify an image with:
 
 ```bash
-python predict.py --image path/to/image.jpg
+python predict.py --image ".\images_test\ship_0.png"
 ```
 
 Optionally specify a different student checkpoint:
