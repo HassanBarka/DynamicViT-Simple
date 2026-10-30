@@ -31,7 +31,7 @@ Le Teacher utilise la même architecture ViT, mais sans modules de prédiction n
 
 Paramètres principaux :
 
-- 15 époques ;
+- 60 époques ;
 - batch de 64 images ;
 - optimiseur AdamW ;
 - taux d'apprentissage `1e-3` et weight decay `0.01`.
@@ -42,7 +42,7 @@ Le Teacher est évalué sur le jeu de test à chaque époque. Ses poids sont enr
 
 Le Student est créé avec l'élagage activé et un ratio de conservation de `0.7`. Il reçoit les poids du Teacher pour les couches communes. Le chargement utilise `strict=False`, car les modules de prédiction du Student n'existent pas dans le Teacher.
 
-Le Student est ensuite entraîné pendant 10 époques. Le Teacher est placé en mode évaluation, et ses sorties sont calculées sans gradient. Deux groupes de paramètres sont optimisés avec AdamW (`weight_decay=0.01`) :
+Le Student est ensuite entraîné pendant 30 époques. Le Teacher est placé en mode évaluation, et ses sorties sont calculées sans gradient. Deux groupes de paramètres sont optimisés avec AdamW (`weight_decay=0.01`) :
 
 - backbone : taux d'apprentissage `1e-4` ;
 - modules de prédiction : taux d'apprentissage `1e-3`.
